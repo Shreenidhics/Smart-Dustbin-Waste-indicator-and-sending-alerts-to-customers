@@ -1,0 +1,198 @@
+#include <ESP8266WiFi.h>           // For WiFi functionalities on ESP8266
+#include <WiFiClientSecure.h>      // For secure WiFi connections (TLS/SSL)
+#include <UniversalTelegramBot.h>  // For interacting with Telegram bot
+#include <WiFiUdp.h>               // For handling UDP communication
+#include <NTPClient.h>             // For NTP (Network Time Protocol) client to get time
+#include <TimeLib.h>               // For time manipulation functions
+#include <string.h>                // For string operations
+#include <LiquidCrystal.h>         // For LCD control
+
+// WiFi credentials
+const char* ssid = "Shri harsha G S";  // Enter your WiFi SSID
+const char* password = "12345678";     // Enter your WiFi password
+
+// Variables to store date
+int m2, d2; 
+
+// NTP client to get time from an NTP server
+WiFiUDP ntpUDP; 
+#define BOTtoken "7438924430:AAF9au6wZ2MCUlW9V6IiB2n03HSxRBD_vzc"  // Your Telegram bot token
+#define CHAT_ID "2061800220"  // Your Telegram chat ID
+
+// NTP Client setup with time zone offset (+5:30 for IST) and update frequency (60s)
+NTPClient timeClient(ntpUDP, "asia.pool.ntp.org", 19800, 60000);
+
+// Strings to store formatted time and date
+char Time[] = "TIME:00:00:00";
+char Date[] = "DATE:00/00/2000";
+
+// Variables for time components
+byte last_second, second_, minute_, hour_, day_, month_;
+int year_;
+
+// Set up root certificate for secure Telegram communication
+X509List cert(TELEGRAM_CERTIFICATE_ROOT);
+WiFiClientSecure client;  // Secure client for Telegram
+UniversalTelegramBot bot(BOTtoken, client);  // Telegram bot object
+
+// Pin assignments for the ultrasonic sensor and buzzer/LED
+int const trigPin = 4;
+int const echoPin = 5;
+int const buzzPin = 12;
+const int LED1 = 13;
+
+void setup() {
+    Serial.begin(115200);  // Initialize serial communication
+    configTime(0, 0, "pool.ntp.org");  // Configure NTP client
+    client.setTrustAnchors(&cert);  // Set up secure connection for Telegram
+
+    // Start WiFi connection
+    WiFi.mode(WIFI_STA);  
+    WiFi.begin(ssid, password);
+
+    // Wait for WiFi connection
+    int a = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.print(".");  // Indicate connecting process
+        delay(500);
+        a++;
+    }
+
+    // Setup sensor and buzzer/LED pin modes
+    pinMode(trigPin, OUTPUT); 
+    pinMode(echoPin, INPUT);
+    pinMode(buzzPin, OUTPUT);
+    pinMode(LED1, OUTPUT);
+
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());  // Display IP address
+
+    // Send Telegram messages upon successful WiFi connection
+    bot.sendMessage(CHAT_ID, "WiFi Connected!", "");
+    bot.sendMessage(CHAT_ID, "System has Started!!", "");
+}
+
+// Function to check if a year is a leap year
+bool isLeap(int y) { 
+    return (y % 100 != 0 && y % 4 == 0) || (y % 400 == 0); 
+}
+
+// Function to calculate number of days since the beginning of the year
+int offsetDays(int d, int m, int y) {
+    int offset = d;
+    int days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    for (int i = 1; i < m; i++) {
+        offset += days_in_month[i];
+    }
+
+    if (isLeap(y) && m > 2) {
+        offset += 1;
+    }
+
+    return offset;
+}
+
+// Function to convert days since the beginning of the year back to date
+void revoffsetDays(int &offset, int &y) { 
+    int mon[13] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (isLeap(y)) 
+        mon[2] = 29;
+
+    int i;
+    for (i = 1; i <= 12; i++) {
+        if (offset <= mon[i]) 
+            break;
+        offset = offset - mon[i];
+    }
+
+    d2 = offset;
+    m2 = i;
+}
+
+// Function to add `x` days to a given date (d1, m1, y1)
+void addDays(int &d1, int &m1, int &y1, int x) {
+    int offset1 = offsetDays(d1, m1, y1);
+    int remDays = isLeap(y1) ? (366 - offset1) : (365 - offset1);
+
+    int y2, offset2 = 0;
+
+    if (x <= remDays) {
+        y2 = y1;
+        offset2 = offset1 + x;
+    } else {
+        x -= remDays;
+        y2 = y1 + 1;
+        int y2days = isLeap(y2) ? 366 : 365;
+        
+        while (x >= y2days) {
+            x -= y2days;
+            y2++;
+            y2days = isLeap(y2) ? 366 : 365;
+        }
+        offset2 = x;
+    }
+
+    revoffsetDays(offset2, y2);
+    bot.sendMessage(CHAT_ID, "ALERT! MOTION DETECTED!! " + String(d2) + "-" + String(m2) + "-" + String(y2), ""); 
+}
+
+void loop() {
+    timeClient.update();  // Update NTP time
+    unsigned long unix_epoch = timeClient.getEpochTime();  // Get the current epoch time
+    second_ = second(unix_epoch);
+
+    // Update time and date every second
+    if (last_second != second_) {
+        minute_ = minute(unix_epoch);
+        hour_ = hour(unix_epoch);
+        day_ = day(unix_epoch);
+        month_ = month(unix_epoch);
+        year_ = year(unix_epoch);
+
+        // Format time and date into Time[] and Date[] strings
+        Time[12] = second_ % 10 + '0';
+        Time[11] = second_ / 10 + '0';
+        Time[9]  = minute_ % 10 + '0';
+        Time[8]  = minute_ / 10 + '0';
+        Time[6]  = hour_ % 10 + '0';
+        Time[5]  = hour_ / 10 + '0';
+
+        Date[5]  = day_ / 10 + '0';
+        Date[6]  = day_ % 10 + '0';
+        Date[8]  = month_ / 10 + '0';
+        Date[9]  = month_ % 10 + '0';
+        Date[13] = (year_ / 10) % 10 + '0';
+        Date[14] = year_ % 10 % 10 + '0';
+
+        Serial.println(Time);
+        Serial.println(Date);
+    }
+
+    // Add 20 days to the current date
+    int DAY = day_;
+    int MONTH = month_;
+    int YEAR = year_;
+    addDays(DAY, MONTH, YEAR, 20);
+
+    // Ultrasonic sensor code to detect motion
+    int duration, distance;
+    digitalWrite(trigPin, HIGH);  // Trigger the sensor
+    delay(1);
+    digitalWrite(trigPin, LOW);
+    duration = pulseIn(echoPin, HIGH);  // Measure pulse duration
+    distance = (duration / 2) / 29.1;   // Calculate distance in cm
+
+    // If motion is detected within 10 cm, send an alert via Telegram
+    if (distance <= 10 && distance >= 0) {
+        digitalWrite(buzzPin, HIGH);
+        digitalWrite(LED1, HIGH);
+        bot.sendMessage(CHAT_ID, "ALERT! MOTION DETECTED!! " + String(MONTH) + "-" + String(DAY) + "-" + String(YEAR), "");
+    } else {
+        digitalWrite(buzzPin, LOW);
+        digitalWrite(LED1, LOW);
+    }
+}
